@@ -1,0 +1,9 @@
+.idea
+CHANGE ME
+dist
+out
+staging
+target
+*.iml
+.orig
+lib
