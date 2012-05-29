@@ -1,8 +1,9 @@
 package groovy.util
 
-class ConfigNode {
-    static final String NODE_VALUE_KEY = '$'
+import groovy.transform.AutoClone
 
+class ConfigNode {
+    protected configuration
     @Delegate
     protected Map map = [:] as LinkedHashMap
 
@@ -13,10 +14,25 @@ class ConfigNode {
     protected ConfigNode parent
     protected String name
 
-    ConfigNode(String name, ConfigNode parentNode = null, URL file = null) {
+    ConfigNode(String name, ConfigNode parentNode = null, URL file = null, ConfigConfiguration configuration = null) {
         this.@name = name
+        this.@configuration = configuration
         parent = parentNode
         configFile = file
+    }
+
+    protected ConfigConfiguration _getConfiguration() {
+        if (!configuration) {
+            try {
+                if (parent instanceof ConfigNode)
+                    return parent._getConfiguration()
+                else
+                    return parent.configuration ?: new ConfigConfiguration()
+            } catch (e) {
+                return new ConfigConfiguration()
+            }
+        }
+        return configuration
     }
 
     def getProperty(String name) {
@@ -39,12 +55,12 @@ class ConfigNode {
             if (value.@map.isEmpty()) {  // Only return newly created, empty, not linked ConfigNodes to enable subproperties
                 return newNode ? value : null
             } else {
-                def cfgValue = value.@map.get(NODE_VALUE_KEY) // value for nodes with children AND a value
+                def cfgValue = value.@map.get(_getConfiguration().NODE_VALUE_KEY) // value for nodes with children AND a value
                 if (cfgValue != null) {
                     // if we have a nodes with children AND a value
                     def val = cfgValue instanceof ConfigValue ? cfgValue.value : cfgValue // use inner value
                     if (value.@map.size() == 1)
-                        return prepareResult(value, NODE_VALUE_KEY, val) // if the node only has a value, but no children, return the value only
+                        return prepareResult(value, _getConfiguration().NODE_VALUE_KEY, val) // if the node only has a value, but no children, return the value only
                     else {
                         // Use an unusual Classname to prevent errors
                         def clsName = 'ConfigNode$_' + val.getClass().name.replaceAll(/\./, '_')
@@ -64,7 +80,7 @@ class $clsName implements $interfaces{
     }
     def propertyMissing(String name) { return map.getProperty(name) }
     def propertyMissing(String name, Object value) { map.setProperty(name, value) }
-    Object methodMissing(String name, Object args) { println name+args; return map.invokeMethod(name, args) }
+    Object methodMissing(String name, Object args) { return map.invokeMethod(name, args) }
     boolean equals(Object obj) { return this.delegate.equals(obj)}
     int hashCode() { return this.delegate.hashCode() }
     String toString() { return this.delegate.toString() }
@@ -84,14 +100,75 @@ $clsName
     }
 
     protected def prepareResult(def node, def key, def value) {
-        if (value instanceof ConfigFactory) {
-            return value.create([this, key])
-        } else if (value instanceof ConfigLazy) {
-            def val = value.create([this, key])
-            setProperty(key, val)
-            return val
+        def result
+        def config = _getConfiguration()
+        if (value instanceof ConfigFactory && config.isFactoryEvaluationEnabled()) {
+            result = value.create([this, key])
+        } else if (value instanceof ConfigLazy && config.isLazyEvaluationEnabled()) {
+            result = value.create([this, key])
+            setProperty(key, result)
         } else
-            return value
+            result = value
+        if (result == null)
+            return result
+        else if (result instanceof ConfigNode)
+            return result
+        else if (result.metaClass.properties.name.contains('_ConfigNode_old'))
+            return result
+        else if (!config.isResultEnhancementEnabled())
+            return result
+
+        def methods = result.metaClass.methods + result.metaClass.metaMethods
+        def pM = methods?.findAll { it?.name == 'propertyMissing'}
+        def mM = methods?.findAll { it?.name == 'methodMissing'}
+        try {
+            result.metaClass._ConfigNode_old = [
+                    propertyMissingSet: pM?.find { it?.isValidExactMethod(String, Object) },
+                    propertyMissingGet: pM?.find { it?.isValidExactMethod(String) },
+                    methodMissing: mM ? mM[0] : null,
+                    key: key,
+                    node: node
+            ]
+        } catch (e) {
+            return result
+        }
+        result.metaClass.methodMissing = {
+            String name,
+            def args ->
+            def orig = delegate._ConfigNode_old
+            if (orig.methodMissing != null)
+                return orig.methodMissing.invoke(delegate, args)
+            else
+                return orig.node.invokeMethod(name, args)
+        }
+        result.metaClass.propertyMissing = {
+            String name,
+            def val ->
+            def orig = delegate._ConfigNode_old
+            if (orig.propertyMissingSet != null)
+                return orig.propertyMissingSet.invoke(delegate, val)
+            else {
+                def n = orig.node[orig.key]
+                if (n instanceof ConfigNode)
+                    return n.setProperty(name, val)
+                else {
+                    def newNode = new ConfigNode(orig.key, orig.node, orig.node.@configFile)
+                    orig.node.@map[orig.key] = new ConfigValue(orig.node, orig.key, newNode)
+                    newNode[_getConfiguration().NODE_VALUE_KEY] = n
+                    newNode[name] = val
+                    return n
+                }
+            }
+        }
+        result.metaClass.propertyMissing = {
+            String name ->
+            def orig = delegate._ConfigNode_old
+            if (orig.propertyMissingGet != null)
+                return orig.methodMissing.invoke(delegate, null)
+            else
+                return orig.node.getProperty(name)
+        }
+        return result
     }
 
     void setProperty(String name, Object value) {
@@ -100,13 +177,13 @@ $clsName
 
     Object put(Object key, Object value) {
         if (value instanceof ConfigNodeProxy) // do not nest ConfigNodeProxy instances, only use its value
-            value = value.@map[NODE_VALUE_KEY]
+            value = value.@map[_getConfiguration().NODE_VALUE_KEY]
         def old = map.get(key)
         def oldValue = old instanceof ConfigValue ? old?.value : old
-        if (old == null || ! (old instanceof ConfigValue)) // if the value to store is new, store it
+        if (old == null || !(old instanceof ConfigValue)) // if the value to store is new, store it
             map.put(key, new ConfigValue(this, key, value))
         else if (oldValue instanceof ConfigNode && !(value instanceof ConfigNode)) { // if an existing node should get a value itself
-            oldValue = oldValue.@map[NODE_VALUE_KEY] = new ConfigValue(oldValue, key, value) // store the new value at the special property
+            oldValue = oldValue.@map[_getConfiguration().NODE_VALUE_KEY] = new ConfigValue(oldValue, _getConfiguration().NODE_VALUE_KEY, value) // store the new value at the special property
             if (oldValue instanceof ConfigValue)
                 oldValue = oldValue.value
         }
@@ -117,7 +194,7 @@ $clsName
 
     boolean containsValue(Object value) {
         if (value instanceof ConfigNodeProxy) // use the value of ConfigNodeProxy instances
-            value = value.@map[NODE_VALUE_KEY]
+            value = value.@map[_getConfiguration().NODE_VALUE_KEY]
         return map.containsValue((value instanceof ConfigValue) ? value.value : value)
     }
 
@@ -147,7 +224,11 @@ $clsName
                 return super.invokeMethod(name, args)
             if (name == 'put')
                 return super.invokeMethod(name, args)
-            get(name).put(NODE_VALUE_KEY, args[0])
+            def old = get(name)
+            if (old instanceof ConfigNode)
+                old.put(_getConfiguration().NODE_VALUE_KEY, args[0])
+            else
+                put(name, args[0])
             return callClosure(name, args[1])
         } else
             return super.invokeMethod(name, args)
@@ -159,7 +240,7 @@ $clsName
         if (!(val instanceof ConfigNode)) {
             def node = new ConfigNode(name, this, this.@configFile)
             if (val != null)
-                node.@map[NODE_VALUE_KEY] = new ConfigValue(node, NODE_VALUE_KEY, val)
+                node.@map[_getConfiguration().NODE_VALUE_KEY] = new ConfigValue(node, _getConfiguration().NODE_VALUE_KEY, val)
             value = new ConfigValue(this, name, node)
             map.put(name, value)
         }
@@ -230,6 +311,7 @@ interface ConfigFactory {
      *
      * @param args a List containing the node and the key
      * @return the newly created instance
+     * @return the newly created instance
      */
     def create(def args)
 }
@@ -243,6 +325,15 @@ interface ConfigLazy {
      * @return the newly created instance
      */
     def create(def args)
+}
+
+@AutoClone
+class ConfigConfiguration {
+    String CONDITIONAL_VALUES_KEY = 'conditionalValues'
+    String NODE_VALUE_KEY = '$'
+    boolean resultEnhancementEnabled = false
+    boolean lazyEvaluationEnabled = true
+    boolean factoryEvaluationEnabled = true
 }
 
 

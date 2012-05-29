@@ -4,9 +4,10 @@ import spock.lang.Ignore
 
 class ConfigParserSpec extends spock.lang.Specification {
 
-    def "Parse a simple config"() {
+    def "Parse a config file"() {
         setup:
         ConfigParser parser = new ConfigParser()
+        parser.configuration.resultEnhancementEnabled = true
 
         when:
         ConfigNode node = parser.parse('''
@@ -24,13 +25,18 @@ copy = role
 a.b.c = 'Test2'
 a.b = 'Test1'
 x.b = 'Test1'
-// Will fail because x.b will return a String.
-// I would have to enhance each single value via metaClass with a propertyMissing method
-//x.b.c = 'Test2'
+x.b.d = 'Test2'
 x.b {
     c = 'Test2'
 }
+e.f = 'Test1'
+e.f('Test') {
+    a = 'Test2'
+}
 y.z = { -> 'Test' }
+v.w = null
+w = null
+f.$ = null
 ''')
 
         then:
@@ -48,10 +54,17 @@ y.z = { -> 'Test' }
         node.a.b == 'Test1'
         node.a.b.c == 'Test2'
         node.x.b == 'Test1'
+        node.x.b.d == 'Test2'
         node.x.b.c == 'Test2'
         node.y.z instanceof Closure
         node.y.z.call() == 'Test'
         node.y.z() == 'Test'
+        node.v.w == null
+        node.w == null
+        node.f == null
+        node.a.b.blah instanceof ConfigNode
+        node.e.f == 'Test'
+        node.e.f.a == 'Test2'
     }
 
     def "New nodes are linked with a set value only"() {
@@ -308,12 +321,50 @@ key6.$ = { 'ConfigLazy' } as ConfigLazy
         def key6 = node.key6
         key6 == 'ConfigLazy'
         key6.is(node.key6)
-
     }
 
-    // TODO: Make metaClass-solution optional via ConfigParser-Option
-    //x.b = 'Test1'
-    // Will fail because x.b will return a String.
-    // I would have to enhance each single value via metaClass with a propertyMissing method
-    //x.b.c = 'Test2'
+    def "Test Conditional Blocks"() {
+        setup:
+        ConfigParser parser = new ConfigParser([environments: ['test', 'dev', 'prod']], environments: 'test')
+        parser.binding.abc = { 'ABC' }
+
+        when:
+        ConfigNode node = parser.parse '''
+test = 123
+environments {
+    test {
+        test = 456
+        abc = abc()
+    }
+    dev {
+        test = 789
+    }
 }
+xxx = 123
+environments {
+    test {
+        yyy = 456
+    }
+    dev {
+        yyy = 789
+    }
+}
+
+environments {
+    dev({ it == 'test' }) {
+        zzz = 123
+    }
+}
+
+env = conditionalValues.environments
+'''
+        then:
+        node.test == 456
+        node.abc == 'ABC'
+        node.xxx == 123
+        node.yyy == 456
+        node.zzz == 123
+        node.env == 'test'
+    }
+}
+
