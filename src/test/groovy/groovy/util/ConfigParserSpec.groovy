@@ -644,5 +644,30 @@ e=5.0
 
     }
 
+    def "Delayed linking has to be resolved"() {
+        setup:
+        ConfigNode node = new ConfigNode('@')
+
+        when:
+        def test = node.test.a.b
+
+        then:
+        test instanceof ConfigNode
+        node.isEmpty()
+
+        when:
+        node.test.a.b.c = 200
+
+        then:
+        node.test.a.b.c == 200
+
+        when:
+        println '------------------------------------'
+        test.c = 100
+
+        then:
+        thrown(DelayedLinkingConflictException)
+    }
+
 }
 

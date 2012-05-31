@@ -16,6 +16,7 @@
 package groovy.util
 
 import org.codehaus.groovy.syntax.Types
+import groovy.transform.InheritConstructors
 
 class ConfigNode implements Writable {
     static final KEYWORDS = Types.getKeywords()
@@ -160,7 +161,7 @@ $clsName
     }
 
     void setProperty(String name, Object value) {
-        put(name, value)
+        this.put(name, value)
     }
 
     Object put(Object key, Object value) {
@@ -441,6 +442,19 @@ $clsName
                 writeValue(key, space, prefix, value, out)
             }
         }
+
+    }
+
+    protected String _getPath() {
+        def current = this
+        def path = ''
+        while (current.@parent != null) {
+            if(path)
+                path = ".$path"
+            path =  "${current.@name}$path"
+            current = current.@parent
+        }
+        return path
     }
 
     private writeConfig_old(String prefix, ConfigNode node, out, int tab, boolean apply) {
@@ -542,17 +556,27 @@ class ConfigValue {
         def name = this.name
         def value = this.value
         def val = node.@map.get(name)
+        if(val instanceof ConfigValue)
+            val = val.value
         while (val == null) {
             node.@map[name] = new ConfigValue(node, name, value, false)
             name = node.@name
             value = node
+            def oldNode = node
             node = node.@parent
             if (node == null)
                 break
-            val = node.@map.get(name)
+            val = node.@map[name]
+            if(val instanceof ConfigValue)
+                val = val.value
+            if(val != null && value.@name == name && !val.is(value) && !this.node.is(value))
+                throw new DelayedLinkingConflictException("Conflict when linking ${this.node._getPath()}.${this.name} with value '$value' at key '$name'")
         }
     }
 }
+
+@InheritConstructors
+class DelayedLinkingConflictException extends Exception {}
 
 interface ConfigNodeProxy {}
 
