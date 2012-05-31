@@ -1,7 +1,49 @@
+/*
+ * Copyright 2003-2012 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package groovy.util
 
+import groovy.transform.AutoClone
 import org.codehaus.groovy.runtime.InvokerHelper
 
+/**
+ * <p>
+ * ConfigParser is a utility class for reading configuration files defined in the form of Groovy
+ * scripts. Configuration settings can be defined using dot notation or scoped using closures
+ *
+ * <pre><code>
+ *   grails.webflow.stateless = true
+ *    smtp {
+ *        mail.host = 'smtp.myisp.com'
+ *        mail.auth.user = 'server'
+ *    }
+ *    resources.URL = "http://localhost:80/resources"
+ * </pre></code>
+ *
+ * <p>Settings can either be bound into nested maps or onto a specified JavaBean instance. In the case
+ * of the latter an error will be thrown if a property cannot be bound.
+ *
+ * <p>This is an enhanced,more flexible rewrite of ConfigSlurper
+ *
+ * TODO: Documentation
+ * TODO: Optional cleanup
+ * TODO: Enhance writing possibilites
+ *
+ * @author Alexander Klein
+ * @since 2.0
+ */
 class ConfigParser {
     static final int THROW_EXCEPTION = 0
     static final int RETURN_NULL = 1
@@ -20,9 +62,19 @@ class ConfigParser {
 
     def ConfigConfiguration configuration = new ConfigConfiguration()
 
+    ConfigParser(Map<String, Object> conditionalValues = [:], Collection<String> conditionalBlocks) {
+        for (def block : conditionalBlocks) {
+            registerConditionalBlock(block)
+        }
+        this.conditionalValues.putAll(conditionalValues)
+    }
+
     ConfigParser(Map<String, Object> conditionalValues = [:], Map<String, ? extends Collection> conditionalBlocks = [:]) {
         conditionalBlocks.each {k, v ->
-            registerConditionalBlock(k, v)
+            if (v == null)
+                registerConditionalBlock(k)
+            else
+                registerConditionalBlock(k, v)
         }
         this.conditionalValues.putAll(conditionalValues)
     }
@@ -32,7 +84,10 @@ class ConfigParser {
      * @param The java.util.Properties instance
      */
     ConfigNode parse(Properties properties) {
-        // TODO: reimplement
+        def node = new ConfigNode('@', null, null, configuration.clone())
+        for (key in properties.keySet())
+            node.setRecursive(key, properties.getProperty(key))
+        return node
     }
 
     /**
@@ -144,7 +199,7 @@ class ConfigParser {
                 }
                 def closure = this.@binding[name]
                 if (closure != null && closure instanceof Closure)
-                    return closure(*args)
+                    return closure(* args)
                 try {
                     if (args.length == 1 && args[0] instanceof Closure) {
                         node.invokeMethod(name, args)
@@ -196,7 +251,7 @@ class ConfigParser {
             if (this.binding) {
                 cfgBinding.getVariables().putAll(this.binding)
             }
-            cfgBinding[configuration.CONDITIONAL_VALUES_KEY] = conditionalValues
+            cfgBinding.getVariables().put(configuration.CONDITIONAL_VALUES_KEY, conditionalValues)
             script.binding = cfgBinding
 
             script.metaClass = mc
@@ -214,11 +269,21 @@ class ConfigParser {
         this.@resolveStrategy = resolveStrategy
     }
 
-    void registerConditionalBlock(String key, Collection values) {
-        this.binding[key] = { Closure closure ->
-            closure.delegate = new ConditionalDelegate(key, values, this)
-            closure.resolveStrategy = Closure.DELEGATE_ONLY
-            closure()
+    void registerConditionalBlock(String key, def values = null) {
+        if (values instanceof Collection) {
+            this.binding[key] = { Closure closure ->
+                closure.delegate = new ConditionalDelegate(key, (Collection) values, this)
+                closure.resolveStrategy = Closure.DELEGATE_ONLY
+                closure()
+            }
+        } else {
+            this.binding[key] = { Closure closure ->
+                if (this.conditionalValues[key]) {
+                    closure.delegate = this.delegate
+                    closure.resolveStrategy = this.resolveStrategy
+                    closure()
+                }
+            }
         }
     }
 
@@ -254,22 +319,30 @@ class ConfigParser {
         }
 
         def invokeMethod(String name, def args) {
+            def currentValue = parser.conditionalValues[key]
             if (values.contains(name)) {
-                def currentValue = parser.conditionalValues[key]
                 if (args.size() == 1 && args[0] instanceof Closure) {
                     if (name == currentValue)
                         return args[0].call()
-                } else if (args.size() == 2 && args[0] instanceof Closure && args[1] instanceof Closure) {
-                    if (args[0].call(currentValue))
+                }
+            }
+            if (name == parser.configuration.CONDITIONAL_CUSTOM_TEST_KEY) {
+                if (args.size() == 2 && args[1] instanceof Closure) {
+                    if (args[0].isCase(currentValue))
                         return args[1].call()
-                } else {
-                    return parser.currentScript.invokeMethod(name, args)
                 }
             }
             return parser.currentScript.invokeMethod(name, args)
         }
     }
-
-    // TODO: merge and other ConfigSlurper methods
 }
 
+@AutoClone
+class ConfigConfiguration {
+    String CONDITIONAL_VALUES_KEY = 'conditionalValues'
+    String CONDITIONAL_CUSTOM_TEST_KEY = 'custom'
+    String NODE_VALUE_KEY = '$'
+    boolean resultEnhancementEnabled = false
+    boolean lazyEvaluationEnabled = true
+    boolean factoryEvaluationEnabled = true
+}

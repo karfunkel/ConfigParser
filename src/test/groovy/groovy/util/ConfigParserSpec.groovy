@@ -1,6 +1,19 @@
+/*
+ * Copyright 2003-2012 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package groovy.util
-
-import spock.lang.Ignore
 
 class ConfigParserSpec extends spock.lang.Specification {
 
@@ -351,8 +364,11 @@ environments {
 }
 
 environments {
-    dev({ it == 'test' }) {
+    custom({ it == 'test' }) {
         zzz = 123
+    }
+    custom(~/t.*t/) {
+        xyz = 123
     }
 }
 
@@ -364,7 +380,269 @@ env = conditionalValues.environments
         node.xxx == 123
         node.yyy == 456
         node.zzz == 123
+        node.xyz == 123
         node.env == 'test'
     }
+
+    def "Test simple Conditional Blocks"() {
+        setup:
+        ConfigParser parser = new ConfigParser(['mytest'], mytest: true)
+        parser.binding.abc = { 'ABC' }
+
+        when:
+        ConfigNode node = parser.parse '''
+test = 123
+mytest {
+    test = 456
+    abc = abc()
+}
+
+env = conditionalValues.mytest
+'''
+        then:
+        node.test == 456
+        node.abc == 'ABC'
+        node.env == true
+    }
+
+    def "Test getRecursive and setRecursive"() {
+        setup:
+        ConfigParser parser = new ConfigParser()
+
+        when:
+        ConfigNode node = parser.parse '''
+group1 {
+    group2('abc') {
+        key1 = 123
+        key2 = 456
+    }
+}
+x.y = 100
+'''
+        then:
+        node.getRecursive('group1.group2.key1') == 123
+        node.getRecursive('group1.group2.key2') == 456
+        node.getRecursive('group1..group2...key2') == 456
+        node.getRecursive('group1.group2') == 'abc'
+
+        when:
+        node.setRecursive('group1.group2.key1', 789)
+        node.setRecursive('group1.group2', 'def')
+        node.setRecursive('a...b.c', 'def')
+        node.setRecursive('x.y.z', 200)
+
+        then:
+        node.getRecursive('group1.group2.key1') == 789
+        node.getRecursive('group1.group2') == 'def'
+        node.getRecursive('a.b.c') == 'def'
+        node.x.y == 100
+        node.x.y.z == 200
+        !(node.x.y.metaClass instanceof EnhancementMetaClass)
+    }
+
+    def "Test ConfigNode from Properties"() {
+        setup:
+        ConfigParser parser = new ConfigParser()
+        Properties props = new Properties()
+        props.load(new StringReader('''
+a = 10
+a.b = 20
+a.b.c = 30
+'''))
+        when:
+        ConfigNode node = parser.parse(props)
+
+        then:
+        node.a == '10'
+        node.a.b == '20'
+        node.a.b.c == '30'
+    }
+
+    def "Test flatten"() {
+        setup:
+        ConfigParser parser = new ConfigParser()
+
+        when:
+        ConfigNode node = parser.parse '''
+a = 10
+a {
+    b {
+        c = 30
+        d = 40
+    }
+}
+e = 50
+'''
+        Map flattened = node.flatten()
+
+        then:
+        node.a == 10
+        node.a.b.c == 30
+        node.a.b.d == 40
+        node.e == 50
+
+        flattened['a'] == 10
+        flattened['a.b.c'] == 30
+        flattened['a.b.d'] == 40
+        flattened['e'] == 50
+
+        flattened == [a: 10, 'a.b.c': 30, 'a.b.d': 40, e: 50]
+    }
+
+    def "Test toProperties"() {
+        setup:
+        ConfigParser parser = new ConfigParser()
+
+        when:
+        ConfigNode node = parser.parse '''
+a = 10
+a {
+    b {
+        c = 30
+        d = 40
+    }
+}
+e = 50
+'''
+        def props = node.toProperties()
+
+        then:
+        node.a == 10
+        node.a.b.c == 30
+        node.a.b.d == 40
+        node.e == 50
+
+        props['a'] == '10'
+        props['a.b.c'] == '30'
+        props['a.b.d'] == '40'
+        props['e'] == '50'
+
+        props == [a: '10', 'a.b.c': '30', 'a.b.d': '40', e: '50']
+        props instanceof Properties
+    }
+
+    def "Test merge"() {
+        setup:
+        ConfigParser parser = new ConfigParser()
+        parser.configuration.resultEnhancementEnabled = true
+
+        when:
+        ConfigNode node1 = parser.parse '''
+a = 10
+a {
+    b {
+        c = 30
+        d = 40
+    }
+}
+e = 50
+'''
+        ConfigNode node2 = parser.parse '''
+a = 20
+a {
+    b = 20
+    b.c = 100
+    c = 30
+}
+f = 50
+'''
+        ConfigNode node = node1.merge(node2)
+
+        then:
+        node.a == 20
+        node.a.b.c == 100
+        node.a.b.d == 40
+        node.e == 50
+        node.a.b == 20
+        node.a.c == 30
+        node.f == 50
+    }
+
+    def "Test writeTo"() {
+        setup:
+        ConfigParser parser = new ConfigParser()
+        parser.configuration.resultEnhancementEnabled = false
+
+        when:
+        ConfigNode node = parser.parse '''
+a = '10'
+a {
+    b {
+        c = '30'
+        d = '40'
+    }
+    f.g = '100'
+    h.i.j {
+        k = 12.345
+    }
+    l.m.n {
+        o = 20
+        p = '20'
+    }
+
+}
+e = 5.0
+'''
+        StringWriter sw = new StringWriter()
+        node.writeTo(sw)
+
+        then:
+        sw.toString() == '''a('10') {
+\tb {
+\t\tc='30'
+\t\td='40'
+\t}
+\tf.g='100'
+\th.i.j.k=12.345
+\tn {
+\t\to=20
+\t\tp='20'
+\t}
+}
+e=5.0
+'''
+        when:
+        parser.configuration.resultEnhancementEnabled = true
+        node = parser.parse '''
+a = '10'
+a {
+    b {
+        c = '30'
+        d = '40'
+    }
+    f.g = '100'
+    h.i.j {
+        k = 12.345
+    }
+    l.m.n {
+        o = 20
+        p = '20'
+    }
+
+}
+e = 5.0
+'''
+        sw = new StringWriter()
+        node.writeTo(sw)
+
+        then:
+        sw.toString() == '''a='10'
+a {
+\tb {
+\t\tc='30'
+\t\td='40'
+\t}
+\tf.g='100'
+\th.i.j.k=12.345
+\tn {
+\t\to=20
+\t\tp='20'
+\t}
+}
+e=5.0
+'''
+
+    }
+
 }
 
