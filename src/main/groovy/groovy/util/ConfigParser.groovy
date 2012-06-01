@@ -37,6 +37,8 @@ import org.codehaus.groovy.runtime.InvokerHelper
  *
  * <p>This is an enhanced,more flexible rewrite of ConfigSlurper
  *
+ * TODO: Observable Map
+ * TODO: ConfigNodeProxy enhancement optional
  * TODO: Documentation
  * TODO: Optional cleanup
  * TODO: Enhance writing possibilites
@@ -86,7 +88,7 @@ class ConfigParser {
     ConfigNode parse(Properties properties) {
         def node = new ConfigNode('@', null, null, configuration.clone())
         for (key in properties.keySet())
-            node.setRecursive(key, properties.getProperty(key))
+            node.putRecursive(key, properties.getProperty(key))
         return node
     }
 

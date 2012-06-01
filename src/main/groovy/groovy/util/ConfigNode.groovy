@@ -154,8 +154,11 @@ $clsName
         def current = this
         def parts = key.split(/\./)
         for (def part : parts) {
-            if (part)
+            if (part) {
                 current = current.getProperty(part)
+                if (current == null || (current instanceof ConfigNode && current.isEmpty()))
+                    return null
+            }
         }
         return current
     }
@@ -181,7 +184,7 @@ $clsName
         return oldValue
     }
 
-    void setRecursive(String key, def value) {
+    void putRecursive(String key, def value) {
         def old = _getConfiguration().resultEnhancementEnabled
         _getConfiguration().resultEnhancementEnabled = true
         def current = this
@@ -194,6 +197,21 @@ $clsName
         }
         current.setProperty(last, value)
         _getConfiguration().resultEnhancementEnabled = old
+    }
+
+    def removeRecursive(String key) {
+        def current = this
+        def lastNode = null
+        def parts = key.split(/\./)
+        for (def part : parts) {
+            if (part) {
+                lastNode = current
+                current = current.getProperty(part)
+                if (current instanceof ConfigNode && current.isEmpty())
+                    return null
+            }
+        }
+        return lastNode.remove(parts.last())
     }
 
     boolean containsValue(Object value) {
@@ -234,8 +252,11 @@ $clsName
             else
                 put(name, args[0])
             return callClosure(name, args[1])
-        } else
-            return super.invokeMethod(name, args)
+        } else {
+            if (super.metaClass?.respondsTo(name, args))
+                return super.invokeMethod(name, args)
+        }
+        throw new MissingMethodException("${this._getPath()}.$name", this.getClass(), args)
     }
 
     private callClosure(String name, Closure closure) {
@@ -449,9 +470,9 @@ $clsName
         def current = this
         def path = ''
         while (current.@parent != null) {
-            if(path)
+            if (path)
                 path = ".$path"
-            path =  "${current.@name}$path"
+            path = "${current.@name}$path"
             current = current.@parent
         }
         return path
@@ -556,7 +577,7 @@ class ConfigValue {
         def name = this.name
         def value = this.value
         def val = node.@map.get(name)
-        if(val instanceof ConfigValue)
+        if (val instanceof ConfigValue)
             val = val.value
         while (val == null) {
             node.@map[name] = new ConfigValue(node, name, value, false)
@@ -567,9 +588,9 @@ class ConfigValue {
             if (node == null)
                 break
             val = node.@map[name]
-            if(val instanceof ConfigValue)
+            if (val instanceof ConfigValue)
                 val = val.value
-            if(val != null && value.@name == name && !val.is(value) && !this.node.is(value))
+            if (val != null && value.@name == name && !val.is(value) && !this.node.is(value))
                 throw new DelayedLinkingConflictException("Conflict when linking ${this.node._getPath()}.${this.name} with value '$value' at key '$name'")
         }
     }

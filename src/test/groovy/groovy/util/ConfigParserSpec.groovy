@@ -405,7 +405,7 @@ env = conditionalValues.mytest
         node.env == true
     }
 
-    def "Test getRecursive and setRecursive"() {
+    def "Test getRecursive, putRecursive and removeRecursive"() {
         setup:
         ConfigParser parser = new ConfigParser()
 
@@ -426,10 +426,10 @@ x.y = 100
         node.getRecursive('group1.group2') == 'abc'
 
         when:
-        node.setRecursive('group1.group2.key1', 789)
-        node.setRecursive('group1.group2', 'def')
-        node.setRecursive('a...b.c', 'def')
-        node.setRecursive('x.y.z', 200)
+        node.putRecursive('group1.group2.key1', 789)
+        node.putRecursive('group1.group2', 'def')
+        node.putRecursive('a...b.c', 'def')
+        node.putRecursive('x.y.z', 200)
 
         then:
         node.getRecursive('group1.group2.key1') == 789
@@ -438,6 +438,14 @@ x.y = 100
         node.x.y == 100
         node.x.y.z == 200
         !(node.x.y.metaClass instanceof EnhancementMetaClass)
+
+        node.getRecursive('a.d') == null
+
+        when:
+        node.removeRecursive('a.b.c')
+
+        then:
+        node.getRecursive('a.b.c') == null
     }
 
     def "Test ConfigNode from Properties"() {
@@ -485,6 +493,7 @@ e = 50
         flattened['a.b.c'] == 30
         flattened['a.b.d'] == 40
         flattened['e'] == 50
+        flattened.'a.b.d' == 40
 
         flattened == [a: 10, 'a.b.c': 30, 'a.b.d': 40, e: 50]
     }
