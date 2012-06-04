@@ -58,6 +58,9 @@ f.$ = null
         node.group.key1 == 'value1'
         node.group.key2 == 567
         node.test == 'xxx'
+        node.role == 'Blah'
+        'Blah' != node.role
+        'Blah' == node.role.$
         node.role.$ == 'Blah'
         node.role.key3 == 'Test'
         node.role instanceof ConfigNodeProxy
@@ -285,23 +288,32 @@ key2 = test2()
         when:
         ConfigNode node = parser.parse('''
 key1 = { 'Normal' }
-key2 = { 'ConfigFactory' } as ConfigFactory
+key2 = { "ConfigFactory ${new Date().time}" } as ConfigFactory
 key5({ 'Normal' }) {}
-key6.$ = { 'ConfigFactory' } as ConfigFactory
+key6.$ = { "ConfigFactory ${new Date().time}" } as ConfigFactory
 ''')
         node.@map.key3 = { 'Normal' }
-        node.@map.key4 = { 'ConfigFactory' } as ConfigFactory
+        node.@map.key4 = { "ConfigFactory ${new Date().time}" } as ConfigFactory
 
         then:
         node.key1 instanceof Closure
         node.key1() == 'Normal'
-        node.key2 == 'ConfigFactory'
+        checkFactory(node, 'key2')
         node.key3 instanceof Closure
         node.key3() == 'Normal'
-        node.key4 == 'ConfigFactory'
+        checkFactory(node, 'key4')
         node.key5 instanceof Closure
         node.key5() == 'Normal'
-        node.key6 == 'ConfigFactory'
+        checkFactory(node, 'key6')
+    }
+
+    private checkFactory(def node, def property) {
+        def first = node[property]
+        first.startsWith('ConfigFactory')
+        sleep 100
+        def second = node[property]
+        second.startsWith('ConfigFactory')
+        second != first
     }
 
     def "Test if ConfigLazy works"() {
