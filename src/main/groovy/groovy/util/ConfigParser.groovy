@@ -302,11 +302,11 @@ class ConfigParser {
         }
 
         try {
-            condition?.conditionalBlock
+            condition.conditionalBlock
         } catch (MissingPropertyException e) {
             throw new IllegalArgumentException("The closure at key '$key' is not a conditionalBlock")
         }
-        if (condition?.values instanceof Collection) {
+        if (condition.values instanceof Collection) {
             condition.values.addAll(values)
         } else {
             registerConditionalBlock(key, values)
