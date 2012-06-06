@@ -25,11 +25,9 @@ import org.codehaus.groovy.runtime.InvokerHelper
  *
  * <pre><code>
  *   grails.webflow.stateless = true
- *    smtp {
- *        mail.host = 'smtp.myisp.com'
+ *    smtp {*        mail.host = 'smtp.myisp.com'
  *        mail.auth.user = 'server'
- *    }
- *    resources.URL = "http://localhost:80/resources"
+ *}*    resources.URL = "http://localhost:80/resources"
  * </pre></code>
  *
  * <p>Settings can either be bound into nested maps or onto a specified JavaBean instance. In the case
@@ -37,10 +35,8 @@ import org.codehaus.groovy.runtime.InvokerHelper
  *
  * <p>This is an enhanced,more flexible rewrite of ConfigSlurper
  *
- * TODO: Observable Map
- * TODO: ConfigNodeProxy enhancement optional
  * TODO: Documentation
- * TODO: Optional cleanup
+ * TODO: Optional cleanup of the code
  * TODO: Enhance writing possibilites
  *
  * @author Alexander Klein
@@ -271,13 +267,14 @@ class ConfigParser {
         this.@resolveStrategy = resolveStrategy
     }
 
-    void registerConditionalBlock(String key, def values = null) {
+    void registerConditionalBlock(String key, Collection values = null) {
         if (values instanceof Collection) {
             this.binding[key] = { Closure closure ->
-                closure.delegate = new ConditionalDelegate(key, (Collection) values, this)
+                closure.delegate = new ConditionalDelegate(key, values, this)
                 closure.resolveStrategy = Closure.DELEGATE_ONLY
                 closure()
             }
+            this.binding[key].delegate = [conditionalBlock: true, values: values]
         } else {
             this.binding[key] = { Closure closure ->
                 if (this.conditionalValues[key]) {
@@ -286,6 +283,33 @@ class ConfigParser {
                     closure()
                 }
             }
+            this.binding[key].delegate = [conditionalBlock: true]
+        }
+    }
+
+    void addOptionsToConditionalBlock(String key, def values) {
+        if (values == null) {
+            return
+        } else if (values instanceof Object[]) {
+            values = values.toList()
+        } else if (!(values instanceof Collection)) {
+            values = [values]
+        }
+        Closure condition = this.binding[key]
+        if (condition == null) {
+            registerConditionalBlock(key, values)
+            return
+        }
+
+        try {
+            condition?.conditionalBlock
+        } catch (MissingPropertyException e) {
+            throw new IllegalArgumentException("The closure at key '$key' is not a conditionalBlock")
+        }
+        if (condition?.values instanceof Collection) {
+            condition.values.addAll(values)
+        } else {
+            registerConditionalBlock(key, values)
         }
     }
 
@@ -347,4 +371,5 @@ class ConfigConfiguration {
     boolean resultEnhancementEnabled = false
     boolean lazyEvaluationEnabled = true
     boolean factoryEvaluationEnabled = true
+    boolean observable = true
 }

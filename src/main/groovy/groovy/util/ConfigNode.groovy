@@ -17,6 +17,8 @@ package groovy.util
 
 import org.codehaus.groovy.syntax.Types
 import groovy.transform.InheritConstructors
+import java.beans.PropertyChangeSupport
+import java.beans.PropertyChangeListener
 
 class ConfigNode implements Writable {
     static final KEYWORDS = Types.getKeywords()
@@ -32,6 +34,8 @@ class ConfigNode implements Writable {
     protected URL configFile
     protected ConfigNode parent
     protected String name
+
+    protected PropertyChangeSupport pcs = new PropertyChangeSupport(this)
 
     ConfigNode(String name, ConfigNode parentNode = null, URL file = null, ConfigConfiguration configuration = null) {
         this.@name = name
@@ -61,12 +65,12 @@ class ConfigNode implements Writable {
     Object get(Object key) {
         boolean newNode = false
         def value
-        if (!map.containsKey(key)) {
+        if (!this.@map.containsKey(key)) {
             // create a new, lazy ConfigNode to enable subproperties, but don't put it into the map
             value = new ConfigNode(key, this, configFile)
             newNode = true
         }
-        value = value == null ? map.get(key) : value
+        value = value == null ? this.@map.get(key) : value
         if (!(value instanceof ConfigValue)) // could be added manually by mistake
             return prepareResult(this, key, value)
         value = value.value // use inner value
@@ -78,9 +82,9 @@ class ConfigNode implements Writable {
                 if (cfgValue != null) {
                     // if we have a nodes with children AND a value
                     def val = cfgValue instanceof ConfigValue ? cfgValue.value : cfgValue // use inner value
-                    if (value.@map.size() == 1)
+                    if (value.@map.size() == 1) {
                         return prepareResult(value, _getConfiguration().NODE_VALUE_KEY, val) // if the node only has a value, but no children, return the value only
-                    else {
+                    } else {
                         // Use an unusual Classname to prevent errors
                         def clsName = 'ConfigNode$_' + val.getClass().name.replaceAll(/\./, '_')
                         // Check Proxy-Class-Cache
@@ -168,20 +172,39 @@ $clsName
     }
 
     Object put(Object key, Object value) {
+        if (value instanceof ConfigValue) // do not nest ConfigNodeProxy instances, only use its value
+            value = value.value // do not ConfigValue instances
         if (value instanceof ConfigNodeProxy) // do not nest ConfigNodeProxy instances, only use its value
             value = value.@map[_getConfiguration().NODE_VALUE_KEY]
-        def old = map.get(key)
+        def old = this.@map.get(key)
         def oldValue = old instanceof ConfigValue ? old?.value : old
-        if (old == null || !(old instanceof ConfigValue)) // if the value to store is new, store it
-            map.put(key, new ConfigValue(this, key, value))
-        else if (oldValue instanceof ConfigNode && !(value instanceof ConfigNode)) { // if an existing node should get a value itself
-            oldValue = oldValue.@map[_getConfiguration().NODE_VALUE_KEY] = new ConfigValue(oldValue, _getConfiguration().NODE_VALUE_KEY, value) // store the new value at the special property
+        if (old == null || !(old instanceof ConfigValue)) { // if the value to store is new, store it
+            this.@map.put(key, new ConfigValue(this, key, value))
+            // will _fire when value is linked
+        } else if (oldValue instanceof ConfigNode && !(value instanceof ConfigNode)) { // if an existing node should get a value itself
+            ConfigNode oldNode = oldValue
+            oldValue = oldNode.@map[_getConfiguration().NODE_VALUE_KEY]
+            oldNode.@map[_getConfiguration().NODE_VALUE_KEY] = new ConfigValue(oldNode, _getConfiguration().NODE_VALUE_KEY, value) // store the new value at the special property
             if (oldValue instanceof ConfigValue)
                 oldValue = oldValue.value
+            oldNode._firePropertyChange(_getConfiguration().NODE_VALUE_KEY, oldValue, value)
         }
-        else
+        else {
             old.value = value // if the node already exists, reset its value
+            _firePropertyChange(key, oldValue, value)
+        }
         return oldValue
+    }
+
+    protected void _firePropertyChange(Object property, Object oldValue, Object newValue, boolean force = false) {
+        if (_getConfiguration().observable) {
+            if (force || oldValue != null) {
+                pcs.firePropertyChange(property, oldValue, newValue)
+                if (this.@parent != null) {
+                    this.@parent?._firePropertyChange("${this.@name}.$property", oldValue, newValue, force)
+                }
+            }
+        }
     }
 
     void putRecursive(String key, def value) {
@@ -217,22 +240,23 @@ $clsName
     boolean containsValue(Object value) {
         if (value instanceof ConfigNodeProxy) // use the value of ConfigNodeProxy instances
             value = value.@map[_getConfiguration().NODE_VALUE_KEY]
-        return map.containsValue((value instanceof ConfigValue) ? value.value : value)
+        return this.@map.containsValue((value instanceof ConfigValue) ? value.value : value)
     }
 
     Object remove(Object key) {
-        def oldConfigNodeProxy = map.remove(key)
+        def old = this.@map.remove(key)
         (old instanceof ConfigValue) ? old.value : old
+        _firePropertyChange(key, old, null, true)
+        return old
     }
 
     Collection<Object> values() {
-        map.values().collect { (it instanceof ConfigValue) ? it.value : it }
+        this.@map.values().collect { (it instanceof ConfigValue) ? it.value : it }
     }
 
     Set<Map.Entry<Object, Object>> entrySet() {
-        map.entrySet().collect {
-            (it.value instanceof ConfigValue) ? new Entry(key: it.key, value: it.value.value) : new Entry(key: it.key, value: it.value)
-        } as Set<Map.Entry<Object, Object>>
+        def thisObj = this
+        this.@map.entrySet().collect { new Entry(it.key, thisObj, it.value) } as Set<Map.Entry<Object, Object>>
     }
 
     @Override
@@ -253,21 +277,29 @@ $clsName
                 put(name, args[0])
             return callClosure(name, args[1])
         } else {
-            if (super.metaClass?.respondsTo(name, args))
+            if (this.metaClass.respondsTo(this, name, args))
                 return super.invokeMethod(name, args)
         }
-        throw new MissingMethodException("${this._getPath()}.$name", this.getClass(), args)
+        def path = this._getPath() ? "${this._getPath()}." : ''
+        throw new MissingMethodException("$path$name", this.getClass(), args)
     }
 
     private callClosure(String name, Closure closure) {
-        def value = map.get(name)
+        def value = this.@map.get(name)
         def val = (value instanceof ConfigValue) ? value.value : value
         if (!(val instanceof ConfigNode)) {
             def node = new ConfigNode(name, this, this.@configFile)
-            if (val != null)
+            if (val != null) {
+                def oldValue = node.@map[_getConfiguration().NODE_VALUE_KEY]
+                if (oldValue instanceof ConfigValue)
+                    oldValue = oldValue.value
                 node.@map[_getConfiguration().NODE_VALUE_KEY] = new ConfigValue(node, _getConfiguration().NODE_VALUE_KEY, val)
+                node._firePropertyChange(_getConfiguration().NODE_VALUE_KEY, oldValue, val)
+            }
+            def oldValue = this.@map[name]
             value = new ConfigValue(this, name, node)
-            map.put(name, value)
+            this.@map.put(name, value)
+            _firePropertyChange(name, oldValue, node)
         }
         closure.delegate = value.value
         closure.resolveStrategy = Closure.DELEGATE_FIRST
@@ -275,18 +307,26 @@ $clsName
     }
 
     class Entry implements Map.Entry<Object, Object> {
-        protected Object key
-        protected Object value
+        ConfigNode node
+        Object key
+        Object value
 
-        Object getKey() { key }
-
-        Object setValue(Object value) {
-            def old = this.value
+        Entry(Object key, ConfigNode node, Object value) {
+            this.key = key
+            this.node = node
             this.value = value
-            return old
         }
 
-        Object getValue() { value }
+        Object getValue() {
+            value instanceof ConfigValue ? value.value : value
+        }
+
+        Object setValue(Object value) {
+            def old = this.value instanceof ConfigValue ? this.value.value : this.value
+            node.setProperty(key, value instanceof ConfigValue ? value.value : value)
+            this.value = node.getProperty(key)
+            return old
+        }
     }
 
     /**
@@ -376,23 +416,30 @@ $clsName
 
     private merge(ConfigNode target, ConfigNode other) {
         for (def entry : other.@map) {
-            if (entry.value instanceof ConfigValue)
-                entry.value = entry.value.value
+            def value = entry.value
+            if (value instanceof ConfigValue)
+                value = value.value
             def configEntry = target.@map[entry.key]
             if (configEntry instanceof ConfigValue)
                 configEntry = configEntry.value
             if (configEntry == null) {
-                target.@map[entry.key] = new ConfigValue(target, entry.key, entry.value instanceof ConfigValue ? entry.value.value : entry.value, false)
+                def oldValue = target.@map[entry.key]
+                target.@map[entry.key] = new ConfigValue(target, entry.key, value, false)
+                target._firePropertyChange(entry.key, oldValue, value)
             } else {
                 if (configEntry instanceof ConfigNode) {
-                    if (entry.value instanceof ConfigNode) {
-                        merge(configEntry, entry.value)
+                    if (value instanceof ConfigNode) {
+                        merge(configEntry, value)
                     } else {
-                        configEntry[_getConfiguration().NODE_VALUE_KEY] = new ConfigValue(configEntry, _getConfiguration().NODE_VALUE_KEY, entry.value instanceof ConfigValue ? entry.value.value : entry.value, false)
+                        def oldValue = configEntry[_getConfiguration().NODE_VALUE_KEY]
+                        configEntry[_getConfiguration().NODE_VALUE_KEY] = new ConfigValue(configEntry, _getConfiguration().NODE_VALUE_KEY, value, false)
+                        configEntry._firePropertyChange(_getConfiguration().NODE_VALUE_KEY, oldValue, value)
                     }
                 }
                 else {
-                    target.@map[entry.key] = new ConfigValue(target, entry.key, entry.value instanceof ConfigValue ? entry.value.value : entry.value, false)
+                    def oldValue = target.@map[entry.key]
+                    target.@map[entry.key] = new ConfigValue(target, entry.key, value, false)
+                    target._firePropertyChange(entry.key, oldValue, value)
                 }
             }
         }
@@ -478,58 +525,6 @@ $clsName
         return path
     }
 
-    private writeConfig_old(String prefix, ConfigNode node, out, int tab, boolean apply) {
-        def space = apply ? TAB_CHARACTER * tab : ''
-        for (key in node.@map.keySet()) {
-            def value = node.@map.get(key)
-            if (value instanceof ConfigValue)
-                value = value.value
-            if (value instanceof ConfigNode) {
-                if (!value.isEmpty()) {
-                    def dotsInKeys = value.find { entry -> entry.key.indexOf('.') > -1 }
-                    def configSize = value.size()
-                    def firstKey = value.keySet().iterator().next()
-                    def firstValue = value.values().iterator().next()
-                    def firstSize
-                    if (firstValue instanceof ConfigNode) {
-                        firstSize = firstValue.size()
-                    }
-                    else { firstSize = 1 }
-                    if (configSize == 1 || dotsInKeys) {
-
-                        if (firstSize == 1 && firstValue instanceof ConfigNode) {
-                            key = KEYWORDS.contains(key) ? key.inspect() : key
-                            def writePrefix = "${prefix}${key}.${firstKey}."
-                            writeConfig_old(writePrefix, firstValue, out, tab, true)
-                        }
-                        else if (!dotsInKeys && firstValue instanceof ConfigNode) {
-                            writeNode(key, space, tab, value, out)
-                        } else {
-                            for (j in value.keySet()) {
-                                def v2 = value.get(j)
-                                def k2 = j.indexOf('.') > -1 ? j.inspect() : j
-                                if (v2 instanceof ConfigNode) {
-                                    key = KEYWORDS.contains(key) ? key.inspect() : key
-                                    writeConfig_old("${prefix}${key}", v2, out, tab, false)
-                                }
-                                else {
-                                    writeValue("${key}.${k2}", space, prefix, v2, out)
-                                }
-                            }
-                        }
-
-                    }
-                    else {
-                        writeNode(key, space, tab, value, out)
-                    }
-                }
-            }
-            else {
-                writeValue(key, space, prefix, value, out)
-            }
-        }
-    }
-
     private writeValue(key, space, prefix, value, out) {
         key = key.indexOf('.') > -1 ? key.inspect() : key
         boolean isKeyword = KEYWORDS.contains(key)
@@ -548,6 +543,34 @@ $clsName
         def last = "${space}}"
         out << last
         out.newLine()
+    }
+
+    void addPropertyChangeListener(PropertyChangeListener listener) {
+        pcs.addPropertyChangeListener(listener)
+    }
+
+    void addPropertyChangeListener(String property, PropertyChangeListener listener) {
+        pcs.addPropertyChangeListener(property, listener)
+    }
+
+    void removePropertyChangeListener(PropertyChangeListener listener) {
+        pcs.removePropertyChangeListener(listener)
+    }
+
+    void removePropertyChangeListener(String property, PropertyChangeListener listener) {
+        pcs.removePropertyChangeListener(property, listener)
+    }
+
+    boolean hasListeners(String property) {
+        pcs.hasListeners(property)
+    }
+
+    void getPropertyChangeListeners(String property) {
+        pcs.getPropertyChangeListeners(property)
+    }
+
+    void getPropertyChangeListeners() {
+        pcs.getPropertyChangeListeners()
     }
 }
 
@@ -576,11 +599,15 @@ class ConfigValue {
         def node = this.node
         def name = this.name
         def value = this.value
-        def val = node.@map.get(name)
+        def val = node?.@map?.get(name)
         if (val instanceof ConfigValue)
             val = val.value
         while (val == null) {
+            def oldValue = node.@map[name]
+            if (oldValue instanceof ConfigValue)
+                oldValue = oldValue.value
             node.@map[name] = new ConfigValue(node, name, value, false)
+            node._firePropertyChange(name, oldValue, value, true)
             name = node.@name
             value = node
             def oldNode = node
@@ -694,9 +721,15 @@ class EnhancementMetaClass extends DelegatingMetaClass {
                     n.setProperty(property, newValue)
                 else {
                     def newNode = new ConfigNode(key, node, node.@configFile)
+                    def oldValue = node.@map[name]
+                    if (oldValue instanceof ConfigValue)
+                        oldValue = oldValue.value
                     node.@map[key] = new ConfigValue(node, key, newNode)
+                    node._firePropertyChange(key, oldValue, newNode)
                     newNode[newNode._getConfiguration().NODE_VALUE_KEY] = n
+                    newNode._firePropertyChange(newNode._getConfiguration().NODE_VALUE_KEY, null, n)
                     newNode[property] = newValue
+                    newNode._firePropertyChange(property, null, newValue)
                 }
             }
         }

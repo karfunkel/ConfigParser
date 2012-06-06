@@ -15,6 +15,9 @@
  */
 package groovy.util
 
+import java.beans.PropertyChangeListener
+import java.beans.PropertyChangeEvent
+
 class ConfigParserSpec extends spock.lang.Specification {
 
     def "Parse a config file"() {
@@ -417,6 +420,48 @@ env = conditionalValues.mytest
         node.env == true
     }
 
+    def "Test adding conditionalBlockOptions"() {
+        setup:
+        ConfigParser parser = new ConfigParser()
+        parser.registerConditionalBlock('simple')
+        parser.setConditionalValue('simple', true)
+
+        when:
+        parser.addOptionsToConditionalBlock('extending', ['test1'])
+        parser.setConditionalValue('extending', 'test1')
+        ConfigNode node = parser.parse '''
+extending {
+    test1 {
+        value = 100
+    }
+}
+'''
+        then:
+        node.value == 100
+
+        when:
+        parser.addOptionsToConditionalBlock('extending', 'test2')
+        parser.setConditionalValue('extending', 'test2')
+        node = parser.parse '''
+extending {
+    test2 {
+        value = 200
+    }
+}
+'''
+        then:
+        node.value == 200
+
+        when:
+        parser = new ConfigParser()
+        parser.binding.extending = { closure -> closure.call() }
+        parser.addOptionsToConditionalBlock('extending', 'test1')
+
+        then:
+        thrown(IllegalArgumentException)
+
+    }
+
     def "Test getRecursive, putRecursive and removeRecursive"() {
         setup:
         ConfigParser parser = new ConfigParser()
@@ -690,5 +735,123 @@ e=5.0
         thrown(DelayedLinkingConflictException)
     }
 
+    def "Test observable"() {
+        setup:
+        ConfigParser parser = new ConfigParser()
+        parser.configuration.resultEnhancementEnabled = true
+
+        ConfigNode node = parser.parse '''
+a {
+    b = 1
+    c = 2
+    c {
+        d = 3
+    }
+}
+e = 4
+'''
+        def events = []
+        node.addPropertyChangeListener({ PropertyChangeEvent evt -> events << evt } as PropertyChangeListener)
+
+        when:
+        node.e = 5
+
+        then:
+        events.size() == 1
+        events[0].propertyName == 'e'
+        events[0].oldValue == 4
+        events[0].newValue == 5
+
+        when:
+        events.clear()
+        node.f = 5
+
+        then:
+        events.size() == 1
+        events[0].propertyName == 'f'
+        events[0].oldValue == null
+        events[0].newValue == 5
+
+        when:
+        events.clear()
+        node.g(6) {}
+
+        then:
+        events.size() == 2
+        events[0].propertyName == 'g.$'
+        events[0].oldValue == null
+        events[0].newValue == 6
+        events[1].propertyName == 'g'
+        events[1].oldValue == null
+        events[1].newValue.size() == 1
+        events[1].newValue.$ == 6
+
+        when:
+        events.clear()
+        node.a.b = 7
+
+        then:
+        events.size() == 1
+        events[0].propertyName == 'a.b'
+        events[0].oldValue == 1
+        events[0].newValue == 7
+
+        when:
+        events.clear()
+        node.a = 8
+
+        then:
+        events.size() == 1
+        events[0].propertyName == 'a.$'
+        events[0].oldValue == null
+        events[0].newValue == 8
+
+        when:
+        events.clear()
+        node.a.c = 9
+
+        then:
+        events.size() == 1
+        events[0].propertyName == 'a.c.$'
+        events[0].oldValue == 2
+        events[0].newValue == 9
+
+        when:
+        events.clear()
+        node.a.h { i = 10 }
+
+        then:
+        events.size() == 2
+        events[0].propertyName == 'a.h'
+        events[0].oldValue == null
+        events[0].newValue.size() == 1
+        events[0].newValue.i == 10
+        events[1].propertyName == 'a.h.i'
+        events[1].oldValue == null
+        events[1].newValue == 10
+
+        when:
+        events.clear()
+        PropertyChangeListener listener = new PropertyChangeListener() {
+            void propertyChange(PropertyChangeEvent evt) {
+                events << evt
+            }
+        }
+        node.a.addPropertyChangeListener({ PropertyChangeEvent evt -> events << evt } as PropertyChangeListener)
+        node.a.c.addPropertyChangeListener({ PropertyChangeEvent evt -> events << evt } as PropertyChangeListener)
+        node.a.c.d = 100
+
+        then:
+        events.size() == 3
+        events[0].propertyName == 'd'
+        events[0].oldValue == 3
+        events[0].newValue == 100
+        events[1].propertyName == 'c.d'
+        events[1].oldValue == 3
+        events[1].newValue == 100
+        events[2].propertyName == 'a.c.d'
+        events[2].oldValue == 3
+        events[2].newValue == 100
+    }
 }
 
