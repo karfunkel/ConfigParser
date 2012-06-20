@@ -19,6 +19,7 @@ import org.codehaus.groovy.syntax.Types
 import groovy.transform.InheritConstructors
 import java.beans.PropertyChangeSupport
 import java.beans.PropertyChangeListener
+import org.codehaus.groovy.runtime.InvokerHelper
 
 class ConfigNode implements Writable {
     static final KEYWORDS = Types.getKeywords()
@@ -37,25 +38,27 @@ class ConfigNode implements Writable {
 
     protected PropertyChangeSupport pcs = new PropertyChangeSupport(this)
 
-    ConfigNode(String name, ConfigNode parentNode = null, URL file = null, ConfigConfiguration configuration = null) {
+    protected ConfigParser parser
+    protected Script script
+
+    ConfigNode(String name, ConfigNode parentNode = null, URL file = null, ConfigConfiguration configuration = null, ConfigParser parser = null, Script script = null) {
         this.@name = name
         this.@configuration = configuration
         parent = parentNode
         configFile = file
+        this.@parser = parser
+        this.@script = script
     }
 
     protected ConfigConfiguration _getConfiguration() {
-        if (!configuration) {
+        if (!this.@configuration) {
             try {
-                if (parent instanceof ConfigNode)
-                    return parent._getConfiguration()
-                else
-                    return parent.configuration ?: new ConfigConfiguration()
+                return this.@parent?._getConfiguration() ?: new ConfigConfiguration()
             } catch (e) {
                 return new ConfigConfiguration()
             }
         }
-        return configuration
+        return this.@configuration
     }
 
     def getProperty(String name) {
@@ -65,9 +68,56 @@ class ConfigNode implements Writable {
     Object get(Object key) {
         boolean newNode = false
         def value
+        ConfigParser parser = this.@parser
+        Script script = this.@script
+        if (parser != null) {
+            if (parser.@binding?.containsKey(key)) {
+                return parser.@binding[key]
+            }
+            switch (parser.resolveStrategy) {
+                case Closure.DELEGATE_FIRST:
+                    try {
+                        def val = parser.delegate?.getAt(key)
+                        if (val != null)
+                            return val
+                    } catch (e) { }
+                    try {
+                        def val = script.invokeMethod("get${key.toString().capitalize()}".toString(), null)
+                        if (val != null)
+                            return val
+                    } catch (e) { }
+                    break
+                case Closure.DELEGATE_ONLY:
+                    try {
+                        def val = parser.delegate?.getAt(key)
+                        if (val != null)
+                            return val
+                    } catch (e) {}
+                    break
+                case Closure.OWNER_FIRST:
+                    try {
+                        def val = script.invokeMethod("get${key.toString().capitalize()}".toString(), null)
+                        if (val != null)
+                            return val
+                    } catch (e) { }
+                    try {
+                        def val = parser.delegate?.getAt(key)
+                        if (val != null)
+                            return val
+                    } catch (e) { }
+                    break
+                case Closure.OWNER_ONLY:
+                    try {
+                        def val = script.invokeMethod("get${key.toString().capitalize()}".toString(), null)
+                        if (val != null)
+                            return val
+                    } catch (e) {}
+                    break
+            }
+        }
         if (!this.@map.containsKey(key)) {
             // create a new, lazy ConfigNode to enable subproperties, but don't put it into the map
-            value = new ConfigNode(key, this, configFile)
+            value = new ConfigNode(key, this, configFile, (ConfigConfiguration) null, (ConfigParser) this.@parser, this.@script)
             newNode = true
         }
         value = value == null ? this.@map.get(key) : value
@@ -261,6 +311,15 @@ $clsName
 
     @Override
     Object invokeMethod(String name, Object args) {
+        ConfigParser parser = this.@parser
+        Script script = this.@script
+        if (parser != null) {
+            if (parser.@binding?.containsKey(name)) {
+                def closure = parser.@binding[name]
+                if (closure instanceof Closure)
+                    return closure(* args)
+            }
+        }
         if (args.length == 1 && args[0] instanceof Closure) {
             if (name == 'containsValue')
                 return super.invokeMethod(name, args)
@@ -277,8 +336,34 @@ $clsName
                 put(name, args[0])
             return callClosure(name, args[1])
         } else {
-            if (this.metaClass.respondsTo(this, name, args))
-                return super.invokeMethod(name, args)
+            if (parser != null) {
+                switch (parser.resolveStrategy) {
+                    case Closure.DELEGATE_FIRST:
+                        if (parser.delegate?.metaClass?.respondsTo(parser.delegate, name, args)) {
+                            return parser.delegate.metaClass.invokeMethod(parser.delegate, name, args)
+                        } else if (this.metaClass.respondsTo(this, name, args)) {
+                            return super.invokeMethod(name, args)
+                        }
+                        break
+                    case Closure.DELEGATE_ONLY:
+                        if (parser.delegate?.metaClass?.respondsTo(parser.delegate, name, args)) {
+                            return parser.delegate.metaClass.invokeMethod(parser.delegate, name, args)
+                        }
+                        break
+                    case Closure.OWNER_FIRST:
+                        if (this.metaClass.respondsTo(this, name, args)) {
+                            return super.invokeMethod(name, args)
+                        } else if (parser.delegate?.metaClass?.respondsTo(parser.delegate, name, args)) {
+                            return parser.delegate.metaClass.invokeMethod(parser.delegate, name, args)
+                        }
+                        break
+                    case Closure.OWNER_ONLY:
+                        if (this.metaClass.respondsTo(this, name, args)) {
+                            return super.invokeMethod(name, args)
+                        }
+                        break
+                }
+            }
         }
         def path = this._getPath() ? "${this._getPath()}." : ''
         throw new MissingMethodException("$path$name", this.getClass(), args)
@@ -288,7 +373,7 @@ $clsName
         def value = this.@map.get(name)
         def val = (value instanceof ConfigValue) ? value.value : value
         if (!(val instanceof ConfigNode)) {
-            def node = new ConfigNode(name, this, this.@configFile)
+            def node = new ConfigNode(name, this, this.@configFile, (ConfigConfiguration) null, this.@parser, this.@script)
             if (val != null) {
                 def oldValue = node.@map[_getConfiguration().NODE_VALUE_KEY]
                 if (oldValue instanceof ConfigValue)
@@ -367,7 +452,7 @@ $clsName
      */
     Map flatten(Map target) {
         if (target == null)
-            target = new ConfigNode('@', null, this.@configFile, _getConfiguration().clone())
+            target = new ConfigNode('@', (ConfigNode) null, this.@configFile, _getConfiguration().clone(), this.@parser, this.@script)
         populate("", target, this)
         return target
     }
@@ -720,7 +805,7 @@ class EnhancementMetaClass extends DelegatingMetaClass {
                 if (n instanceof ConfigNode)
                     n.setProperty(property, newValue)
                 else {
-                    def newNode = new ConfigNode(key, node, node.@configFile)
+                    def newNode = new ConfigNode(key, node, node.@configFile, (ConfigConfiguration) null, node.@parser, node.@script)
                     def oldValue = node.@map[name]
                     if (oldValue instanceof ConfigValue)
                         oldValue = oldValue.value

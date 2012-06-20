@@ -17,6 +17,7 @@ package groovy.util
 
 import groovy.transform.AutoClone
 import org.codehaus.groovy.runtime.InvokerHelper
+import org.codehaus.groovy.control.CompilerConfiguration
 
 /**
  * <p>
@@ -24,14 +25,14 @@ import org.codehaus.groovy.runtime.InvokerHelper
  * scripts. Configuration settings can be defined using dot notation or scoped using closures
  *
  * <pre><code>
- *   grails.webflow.stateless = true
+ *    grails.webflow.stateless = true
  *    smtp {*        mail.host = 'smtp.myisp.com'
  *        mail.auth.user = 'server'
- *}*    resources.URL = "http://localhost:80/resources"
+ *}*    proxy = 'http://proxy.mycompany.com:4580'
+ *    proxy.user = 'myUser'
+ *    proxy.password = 'myPassword'
+ *    resources.URL = "http://localhost:80/resources"
  * </pre></code>
- *
- * <p>Settings can either be bound into nested maps or onto a specified JavaBean instance. In the case
- * of the latter an error will be thrown if a property cannot be bound.
  *
  * <p>This is an enhanced,more flexible rewrite of ConfigSlurper
  *
@@ -58,13 +59,14 @@ class ConfigParser {
     protected ConfigNode currentNode
     protected Script currentScript
 
-    def ConfigConfiguration configuration = new ConfigConfiguration()
+    ConfigConfiguration configuration = new ConfigConfiguration()
 
     ConfigParser(Map<String, Object> conditionalValues = [:], Collection<String> conditionalBlocks) {
         for (def block : conditionalBlocks) {
             registerConditionalBlock(block)
         }
         this.conditionalValues.putAll(conditionalValues)
+
     }
 
     ConfigParser(Map<String, Object> conditionalValues = [:], Map<String, ? extends Collection> conditionalBlocks = [:]) {
@@ -82,9 +84,12 @@ class ConfigParser {
      * @param The java.util.Properties instance
      */
     ConfigNode parse(Properties properties) {
-        def node = new ConfigNode('@', null, null, configuration.clone())
+        def node = new ConfigNode('@', (ConfigNode) null, (URL) null, configuration.clone(), this, (Script) null)
+        def old = node._getConfiguration().resultEnhancementEnabled
+        node._getConfiguration.resultEnhancementEnabled = true
         for (key in properties.keySet())
             node.putRecursive(key, properties.getProperty(key))
+        node._getConfiguration().resultEnhancementEnabled = old
         return node
     }
 
@@ -134,58 +139,24 @@ class ConfigParser {
      * @return The ConfigNode instance
      */
     ConfigNode parse(Script script, URL location) {
+        def old = configuration.resultEnhancementEnabled
+        def node
         try {
             def thisObj = this
-            def node = new ConfigNode('@', null, location, configuration.clone())
+            node = new ConfigNode('@', null, location, configuration.clone(), this, script)
+            node._getConfiguration().resultEnhancementEnabled = true
             this.currentNode = node
             this.currentScript = script
 
             GroovySystem.metaClassRegistry.removeMetaClass(script.getClass())
             def mc = script.getClass().metaClass
             mc.getProperty = { String name ->
-                switch (thisObj.resolveStrategy) {
-                    case Closure.DELEGATE_FIRST:
-                        try {
-                            def val = thisObj.delegate?.getAt(name)
-                            if (val != null)
-                                return val
-                        } catch (e) { }
-                        try {
-                            def val = thisObj[name]
-                            if (val != null)
-                                return val
-                        } catch (e) { }
-                        break
-                    case Closure.DELEGATE_ONLY:
-                        try {
-                            def val = thisObj.delegate?.getAt(name)
-                            if (val != null)
-                                return val
-                        } catch (e) {}
-                        break
-                    case Closure.OWNER_FIRST:
-                        try {
-                            def val = thisObj[name]
-                            if (val != null)
-                                return val
-                        } catch (e) { }
-                        try {
-                            def val = thisObj.delegate?.getAt(name)
-                            if (val != null)
-                                return val
-                        } catch (e) { }
-                        break
-                    case Closure.OWNER_ONLY:
-                        try {
-                            def val = thisObj[name]
-                            if (val != null)
-                                return val
-                        } catch (e) {}
-                        break
+                if (name == 'binding') {
+                    MetaProperty mp = mc.getMetaProperty(name)
+                    return mp.getProperty(script)
                 }
                 return node[name]
             }
-
             mc.invokeMethod = { String name, args ->
                 switch (name) {
                     case 'run':
@@ -195,9 +166,10 @@ class ConfigParser {
                         MetaMethod mm = mc.getMetaMethod(name, args)
                         return mm.invoke(script, args)
                 }
-                def closure = this.@binding[name]
-                if (closure != null && closure instanceof Closure)
+                def closure = thisObj.@binding[name]
+                if (closure != null && closure instanceof Closure) {
                     return closure(* args)
+                }
                 try {
                     if (args.length == 1 && args[0] instanceof Closure) {
                         node.invokeMethod(name, args)
@@ -208,7 +180,7 @@ class ConfigParser {
                         switch (thisObj.resolveStrategy) {
                             case Closure.DELEGATE_FIRST:
                                 try {
-                                    return InvokerHelper.invokeMethodSafe(this.@delegate, name, args)
+                                    return InvokerHelper.invokeMethodSafe(thisObj.@delegate, name, args)
                                 } catch (MissingMethodException e) {
                                     if (mm) {
                                         return mm.invoke(delegate, args)
@@ -217,7 +189,7 @@ class ConfigParser {
                                     }
                                 }
                             case Closure.DELEGATE_ONLY:
-                                return InvokerHelper.invokeMethodSafe(this.@delegate, name, args)
+                                return InvokerHelper.invokeMethodSafe(thisObj.@delegate, name, args)
                             case Closure.OWNER_ONLY:
                                 if (mm) {
                                     return mm.invoke(delegate, args)
@@ -228,7 +200,7 @@ class ConfigParser {
                                 if (mm) {
                                     return mm.invoke(delegate, args)
                                 } else {
-                                    return InvokerHelper.invokeMethodSafe(this.@delegate, name, args)
+                                    return InvokerHelper.invokeMethodSafe(thisObj.@delegate, name, args)
                                 }
                         }
                     }
@@ -247,15 +219,16 @@ class ConfigParser {
                 node[name] = value
             })
             if (this.binding) {
+                binding.put(configuration.CONDITIONAL_VALUES_KEY, conditionalValues)
                 cfgBinding.getVariables().putAll(this.binding)
             }
-            cfgBinding.getVariables().put(configuration.CONDITIONAL_VALUES_KEY, conditionalValues)
             script.binding = cfgBinding
 
             script.metaClass = mc
             script.run()
             return node
         } finally {
+            node._getConfiguration().resultEnhancementEnabled = old
             this.currentNode = null
             this.currentScript = null
         }

@@ -1,4 +1,5 @@
 .idea
+.gradle
 CHANGE ME
 dist
 out

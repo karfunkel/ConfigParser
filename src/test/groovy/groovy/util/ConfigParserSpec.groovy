@@ -17,6 +17,7 @@ package groovy.util
 
 import java.beans.PropertyChangeListener
 import java.beans.PropertyChangeEvent
+import org.codehaus.groovy.control.CompilerConfiguration
 
 class ConfigParserSpec extends spock.lang.Specification {
 
@@ -187,14 +188,26 @@ key4 = test3()
     def "Test if delegate with its resolveStrategy works for properties"() {
         setup:
         ConfigParser parser = new ConfigParser()
-        parser.metaClass.test = 'Owner'
-        parser.metaClass.test3 = true
+        CompilerConfiguration cfg = new CompilerConfiguration()
+        cfg.setScriptBaseClass(TestBaseClass.name)
+        parser.classLoader = new GroovyClassLoader(Thread.currentThread().getContextClassLoader(), cfg)
         def exception
-        parser.delegate = [test: 'Delegate', test2: true]
+        parser.delegate = [test: 'Delegate', test2: 'Delegate', test5: { 'Delegate' }]
         def src = '''
 key1 = test
-key3 = test2
-key4 = test3
+key2 = test2
+key3 = test3
+try { key4 = test4() } catch(e) { key4 = null }
+try { key5 = test5() } catch(e) { key5 = null }
+try { key6 = test6() } catch(e) { key6 = null }
+group {
+    key1 = test
+    key2 = test2
+    key3 = test3
+    try { key4 = test4() } catch(e) { key4 = null }
+    try { key5 = test5() } catch(e) { key5 = null }
+    try { key6 = test6() } catch(e) { key6 = null }
+}
 '''
         ConfigNode node
 
@@ -206,8 +219,17 @@ key4 = test3
 
         then:
         node.key1 == 'Owner'
-        node.key3 == true
-        node.key4 == true
+        node.key2 == 'Delegate'
+        node.key3 == 'Owner'
+        node.key4 == 'Owner'
+        node.key5 == 'Delegate'
+        node.key6 == 'Owner'
+        node.group.key1 == 'Owner'
+        node.group.key2 == 'Delegate'
+        node.group.key3 == 'Owner'
+        node.group.key4 == 'Owner'
+        node.group.key5 == 'Delegate'
+        node.group.key6 == 'Owner'
 
         when:
         parser.resolveStrategy = Closure.DELEGATE_FIRST
@@ -215,8 +237,17 @@ key4 = test3
 
         then:
         node.key1 == 'Delegate'
-        node.key3 == true
-        node.key4 == true
+        node.key2 == 'Delegate'
+        node.key3 == 'Owner'
+        node.key4 == 'Owner'
+        node.key5 == 'Delegate'
+        node.key6 == 'Owner'
+        node.group.key1 == 'Delegate'
+        node.group.key2 == 'Delegate'
+        node.group.key3 == 'Owner'
+        node.group.key4 == 'Owner'
+        node.group.key5 == 'Delegate'
+        node.group.key6 == 'Owner'
 
         when:
         parser.resolveStrategy = Closure.OWNER_ONLY
@@ -224,8 +255,17 @@ key4 = test3
 
         then:
         node.key1 == 'Owner'
-        node.key3 == null
-        node.key4 == true
+        node.key2 == null
+        node.key3 == 'Owner'
+        node.key4 == 'Owner'
+        node.key5 == null
+        node.key6 == 'Owner'
+        node.group.key1 == 'Owner'
+        node.group.key2 == null
+        node.group.key3 == 'Owner'
+        node.group.key4 == 'Owner'
+        node.group.key5 == null
+        node.group.key6 == 'Owner'
 
         when:
         parser.resolveStrategy = Closure.DELEGATE_ONLY
@@ -233,14 +273,23 @@ key4 = test3
 
         then:
         node.key1 == 'Delegate'
-        node.key3 == true
+        node.key2 == 'Delegate'
+        node.key3 == null
         node.key4 == null
+        node.key5 == 'Delegate'
+        node.key6 == null
+        node.group.key1 == 'Delegate'
+        node.group.key2 == 'Delegate'
+        node.group.key3 == null
+        node.group.key4 == null
+        node.group.key5 == 'Delegate'
+        node.group.key6 == null
     }
 
     def "Test if binding variables work"() {
         setup:
         ConfigParser parser = new ConfigParser()
-        parser.binding.test = 'Binding'
+        parser.binding['test'] = 'Binding'
         parser.binding.test2 = { 'Binding' }
         parser.metaClass.test = 'Owner'
         parser.metaClass.test2 = { 'Owner' }
@@ -249,6 +298,10 @@ key4 = test3
         def src = '''
 key1 = test
 key2 = test2()
+group {
+    key1 = test
+    key2 = test2()
+}
 '''
         ConfigNode node
 
@@ -258,6 +311,8 @@ key2 = test2()
         then:
         node.key1 == 'Binding'
         node.key2 == 'Binding'
+        node.group.key1 == 'Binding'
+        node.group.key2 == 'Binding'
 
         when:
         parser.resolveStrategy = Closure.DELEGATE_FIRST
@@ -266,6 +321,8 @@ key2 = test2()
         then:
         node.key1 == 'Binding'
         node.key2 == 'Binding'
+        node.group.key1 == 'Binding'
+        node.group.key2 == 'Binding'
 
         when:
         parser.resolveStrategy = Closure.OWNER_ONLY
@@ -274,6 +331,8 @@ key2 = test2()
         then:
         node.key1 == 'Binding'
         node.key2 == 'Binding'
+        node.group.key1 == 'Binding'
+        node.group.key2 == 'Binding'
 
         when:
         parser.resolveStrategy = Closure.DELEGATE_ONLY
@@ -282,6 +341,8 @@ key2 = test2()
         then:
         node.key1 == 'Binding'
         node.key2 == 'Binding'
+        node.group.key1 == 'Binding'
+        node.group.key2 == 'Binding'
     }
 
     def "Test if ConfigFactory works"() {
@@ -354,7 +415,7 @@ key6.$ = { 'ConfigLazy' } as ConfigLazy
     def "Test Conditional Blocks"() {
         setup:
         ConfigParser parser = new ConfigParser([environments: ['test', 'dev', 'prod']], environments: 'test')
-        parser.binding.abc = { 'ABC' }
+        parser.binding.method = { 'ABC' }
 
         when:
         ConfigNode node = parser.parse '''
@@ -362,7 +423,7 @@ test = 123
 environments {
     test {
         test = 456
-        abc = abc()
+        abc = method()
     }
     dev {
         test = 789
@@ -402,14 +463,14 @@ env = conditionalValues.environments
     def "Test simple Conditional Blocks"() {
         setup:
         ConfigParser parser = new ConfigParser(['mytest'], mytest: true)
-        parser.binding.abc = { 'ABC' }
+        parser.binding.method = { 'ABC' }
 
         when:
         ConfigNode node = parser.parse '''
 test = 123
 mytest {
     test = 456
-    abc = abc()
+    abc = method()
 }
 
 env = conditionalValues.mytest
@@ -728,7 +789,6 @@ e=5.0
         node.test.a.b.c == 200
 
         when:
-        println '------------------------------------'
         test.c = 100
 
         then:
@@ -854,4 +914,16 @@ e = 4
         events[2].newValue == 100
     }
 }
+
+abstract class TestBaseClass extends Script {
+    def test = 'Owner'
+    def test3 = 'Owner'
+    def test4() {
+        'Owner'
+    }
+    def test6() {
+        'Owner'
+    }
+}
+
 
