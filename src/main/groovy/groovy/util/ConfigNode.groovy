@@ -340,21 +340,21 @@ $clsName
                 switch (parser.resolveStrategy) {
                     case Closure.DELEGATE_FIRST:
                         if (parser.delegate?.metaClass?.respondsTo(parser.delegate, name, args)) {
-                            return parser.delegate.metaClass.invokeMethod(parser.delegate, name, args)
+                            return InvokerHelper.invokeMethod(parser.delegate, name, args)
                         } else if (this.metaClass.respondsTo(this, name, args)) {
                             return super.invokeMethod(name, args)
                         }
                         break
                     case Closure.DELEGATE_ONLY:
                         if (parser.delegate?.metaClass?.respondsTo(parser.delegate, name, args)) {
-                            return parser.delegate.metaClass.invokeMethod(parser.delegate, name, args)
+                            return InvokerHelper.invokeMethod(parser.delegate, name, args)
                         }
                         break
                     case Closure.OWNER_FIRST:
                         if (this.metaClass.respondsTo(this, name, args)) {
                             return super.invokeMethod(name, args)
                         } else if (parser.delegate?.metaClass?.respondsTo(parser.delegate, name, args)) {
-                            return parser.delegate.metaClass.invokeMethod(parser.delegate, name, args)
+                            return InvokerHelper.invokeMethod(parser.delegate, name, args)
                         }
                         break
                     case Closure.OWNER_ONLY:
@@ -386,8 +386,8 @@ $clsName
             this.@map.put(name, value)
             _firePropertyChange(name, oldValue, node)
         }
-        closure.delegate = value.value
-        closure.resolveStrategy = Closure.DELEGATE_FIRST
+        closure.delegate = new CombinedDelegate(parser?.delegate, value.value, parser?.@binding, parser?.@resolveStrategy)
+        closure.resolveStrategy = parser?.resolveStrategy == Closure.DELEGATE_ONLY ? Closure.DELEGATE_ONLY : Closure.DELEGATE_FIRST
         closure.call()
     }
 
@@ -821,5 +821,58 @@ class EnhancementMetaClass extends DelegatingMetaClass {
     }
 }
 
+class CombinedDelegate {
+    private def base
+    private def sub
+    private def binding
+    private def resolveStrategy
 
+    CombinedDelegate(def base, def sub, def binding, def resolveStrategy) {
+        this.@base = base
+        this.@sub = sub
+        this.@binding = binding
+        this.@resolveStrategy = resolveStrategy
+    }
 
+    @Override
+    Object getProperty(String property) {
+        try {
+            def val = this.@binding?.getProperty(property)
+            if (val != null)
+                return val
+        } catch (e) { }
+        try {
+            def val = this.@sub?.getAt(property)
+            if (val != null)
+                return val
+        } catch (e) { }
+        try {
+            def val = this.@base?.getAt(property)
+            if (val != null)
+                return val
+        } catch (e) { }
+        throw new MissingPropertyException(property, this.@base.getClass())
+    }
+
+    @Override
+    void setProperty(String property, Object newValue) {
+        this.@sub.setProperty(property, newValue)
+    }
+
+    @Override
+    Object invokeMethod(String name, Object args) {
+        try {
+            def cls = binding?.getAt(name)
+            if (cls instanceof Closure)
+                return cls(* args)
+        } catch (e) { }
+
+        if(this.@resolveStrategy == Closure.OWNER_ONLY)
+            throw new MissingMethodException(this.@base, name, args)
+
+        try {
+            return InvokerHelper.invokeMethod(this.@sub, name, args)
+        } catch (e) { }
+        return InvokerHelper.invokeMethod(this.@base, name, args)
+    }
+}
