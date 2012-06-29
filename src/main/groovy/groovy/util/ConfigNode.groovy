@@ -496,10 +496,10 @@ $clsName
      * @return The result of the merge
      */
     Map merge(ConfigNode other) {
-        return merge(this, other)
+        return doMerge(this, other)
     }
 
-    private merge(ConfigNode target, ConfigNode other) {
+    private doMerge(ConfigNode target, ConfigNode other) {
         for (def entry : other.@map) {
             def value = entry.value
             if (value instanceof ConfigValue)
@@ -514,7 +514,7 @@ $clsName
             } else {
                 if (configEntry instanceof ConfigNode) {
                     if (value instanceof ConfigNode) {
-                        merge(configEntry, value)
+                        doMerge(configEntry, value)
                     } else {
                         def oldValue = configEntry[_getConfiguration().NODE_VALUE_KEY]
                         configEntry[_getConfiguration().NODE_VALUE_KEY] = new ConfigValue(configEntry, _getConfiguration().NODE_VALUE_KEY, value, false)

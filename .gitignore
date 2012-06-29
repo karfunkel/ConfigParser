@@ -9,3 +9,5 @@ target
 .orig
 lib
 build
+*.iws
+*.ipr
