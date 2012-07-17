@@ -18,3 +18,17 @@ dependencies {
     testCompile "org.spockframework:spock-core:0.7-groovy-2.0-SNAPSHOT"
 }
 
+jar {
+    manifest {
+        attributes(
+                'Bundle-ManifestVersion': '2',
+                'Bundle-Name': 'ConfigParser',
+                'Bundle-SymbolicName': 'configparser',
+                'Bundle-Version': version,
+                'Bundle-RequiredExecutionEnvironment': 'JavaSE-1.6',
+                'Export-Package': 'groovy.util',
+                'Require-Bundle': 'org.codehaus.groovy;bundle-version="2.0.0"'
+        )
+    }
+}
+
