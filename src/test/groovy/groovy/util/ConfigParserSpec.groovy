@@ -769,6 +769,53 @@ a {
 e=5.0
 '''
 
+        when:
+        parser.configuration.valueToCode = {value ->
+            switch (value) {
+                case String:
+                    return "-$value-"
+                default:
+                    return value.inspect()
+            }
+        }
+        node = parser.parse '''
+a = '10'
+a {
+    b {
+        c = '30'
+        d = '40'
+    }
+    f.g = '100'
+    h.i.j {
+        k = 12.345
+    }
+    l.m.n {
+        o = 20
+        p = '20'
+    }
+}
+e = 5.0
+'''
+        sw = new StringWriter()
+        node.writeTo(sw)
+
+        then:
+        sw.toString() == '''a=-10-
+a {
+\tb {
+\t\tc=-30-
+\t\td=-40-
+\t}
+\tf.g=-100-
+\th.i.j.k=12.345
+\tn {
+\t\to=20
+\t\tp=-20-
+\t}
+}
+e=5.0
+'''
+
     }
 
     def "Delayed linking has to be resolved"() {
@@ -918,9 +965,11 @@ e = 4
 abstract class TestBaseClass extends Script {
     def test = 'Owner'
     def test3 = 'Owner'
+
     def test4() {
         'Owner'
     }
+
     def test6() {
         'Owner'
     }

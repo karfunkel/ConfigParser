@@ -345,4 +345,7 @@ class ConfigConfiguration {
     boolean lazyEvaluationEnabled = true
     boolean factoryEvaluationEnabled = true
     boolean observable = true
+    Closure valueToCode = {value ->
+        value.inspect()
+    }
 }

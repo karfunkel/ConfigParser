@@ -295,7 +295,7 @@ $clsName
 
     Object remove(Object key) {
         def old = this.@map.remove(key)
-        (old instanceof ConfigValue) ? old.value : old
+        old = (old instanceof ConfigValue) ? old.value : old
         _firePropertyChange(key, old, null, true)
         return old
     }
@@ -550,6 +550,7 @@ $clsName
     }
 
     private writeConfig(String prefix, ConfigNode node, out, int tab, boolean apply) {
+        Closure export = _getConfiguration().valueToCode
         def space = apply ? TAB_CHARACTER * tab : ''
         for (key in node.@map.keySet()) {
             if (key == _getConfiguration().NODE_VALUE_KEY)
@@ -571,8 +572,8 @@ $clsName
                                 writeValue(key, space, prefix, val, out)
                                 writeNode(key, space, tab, value, out)
                             } else {
-                                def k = KEYWORDS.contains(key) ? key.inspect() : key
-                                k = "$k(${val.inspect()})".toString()
+                                def k = KEYWORDS.contains(key) ? export(key) : key
+                                k = "$k(${export(val)})".toString()
                                 writeNode(k, space, tab, value, out)
                             }
                         } else { // only children exist
@@ -584,7 +585,7 @@ $clsName
                         def firstValue = value.@map[firstKey]
                         if (firstValue instanceof ConfigValue)
                             firstValue = firstValue.value
-                        key = KEYWORDS.contains(key) ? key.inspect() : key
+                        key = KEYWORDS.contains(key) ? export(key) : key
                         def writePrefix = "${prefix}${key}."
                         writeConfig(writePrefix, value, out, tab, true)
                     } else {
@@ -611,17 +612,19 @@ $clsName
     }
 
     private writeValue(key, space, prefix, value, out) {
-        key = key.indexOf('.') > -1 ? key.inspect() : key
+        Closure export = _getConfiguration().valueToCode
+        key = key.indexOf('.') > -1 ? export(key) : key
         boolean isKeyword = KEYWORDS.contains(key)
-        key = isKeyword ? key.inspect() : key
+        key = isKeyword ? export(key) : key
 
         if (!prefix && isKeyword) prefix = "this."
-        out << "${space}${prefix}$key=${value.inspect()}"
+        out << "${space}${prefix}$key=${export(value)}"
         out.newLine()
     }
 
     private writeNode(key, space, tab, value, out) {
-        key = KEYWORDS.contains(key) ? key.inspect() : key
+        Closure export = _getConfiguration().valueToCode
+        key = KEYWORDS.contains(key) ? export(key) : key
         out << "${space}$key {"
         out.newLine()
         writeConfig("", value, out, tab + 1, true)
