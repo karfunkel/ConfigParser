@@ -23,8 +23,8 @@ jar {
         attributes(
                 'Bundle-ManifestVersion': '2',
                 'Bundle-Name': 'ConfigParser',
-                'Bundle-SymbolicName': 'groovy.util.configparser',
-                'Bundle-Version': "$version.0-${new Date().format('yyyyMMdd')}",
+                'Bundle-SymbolicName': 'org.codehaus.groovy.util.configparser',
+                'Bundle-Version': "$version.0.xx-${new Date().format('yyyyMMdd')}",
                 'Bundle-RequiredExecutionEnvironment': 'JavaSE-1.6',
                 'Export-Package': 'groovy.util',
                 'Require-Bundle': 'org.codehaus.groovy;bundle-version="2.0.0"'
