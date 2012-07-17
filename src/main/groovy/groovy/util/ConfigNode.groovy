@@ -284,7 +284,8 @@ $clsName
                     return null
             }
         }
-        return lastNode.remove(parts.last())
+        def old = lastNode.remove(parts.last())
+        return old instanceof ConfigValue ? old.value : old
     }
 
     boolean containsValue(Object value) {
