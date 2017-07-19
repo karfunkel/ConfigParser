@@ -6,16 +6,12 @@ archivesBaseName = 'configparser'
 version = '0.1'
 
 repositories {
-    mavenCentral()
-    maven {
-        url "http://oss.sonatype.org/content/repositories/snapshots"
-    }
+    jcenter()
 }
 
 dependencies {
-    groovy "org.codehaus.groovy:groovy-all:2.0.0"
-
-    testCompile "org.spockframework:spock-core:0.7-groovy-2.0-SNAPSHOT"
+    compile "org.codehaus.groovy:groovy-all:2.4.12"
+    testCompile "org.spockframework:spock-core:1.1-groovy-2.4"
 }
 
 jar {
