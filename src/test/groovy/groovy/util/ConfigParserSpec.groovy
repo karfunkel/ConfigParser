@@ -19,6 +19,8 @@ import java.beans.PropertyChangeListener
 import java.beans.PropertyChangeEvent
 import org.codehaus.groovy.control.CompilerConfiguration
 
+import java.util.regex.Pattern
+
 class ConfigParserSpec extends spock.lang.Specification {
 
     def "Parse a config file"() {
@@ -714,7 +716,7 @@ e = 5.0
         node.writeTo(sw)
 
         then:
-        sw.toString() == '''a('10') {
+        normalizeEOL(sw.toString()) == '''a('10') {
 \tb {
 \t\tc='30'
 \t\td='40'
@@ -753,7 +755,7 @@ e = 5.0
         node.writeTo(sw)
 
         then:
-        sw.toString() == '''a='10'
+        normalizeEOL(sw.toString()) == '''a='10'
 a {
 \tb {
 \t\tc='30'
@@ -800,7 +802,7 @@ e = 5.0
         node.writeTo(sw)
 
         then:
-        sw.toString() == '''a=-10-
+        normalizeEOL(sw.toString()) == '''a=-10-
 a {
 \tb {
 \t\tc=-30-
@@ -960,6 +962,12 @@ e = 4
         events[2].oldValue == 3
         events[2].newValue == 100
     }
+
+    private static String normalizeEOL(String value) {
+        Pattern replaceCrLfPattern = Pattern.compile("[\\r\\n]+", Pattern.MULTILINE + Pattern.DOTALL)
+        return value.replaceAll(replaceCrLfPattern, "\n")
+    }
+
 }
 
 abstract class TestBaseClass extends Script {
@@ -974,5 +982,3 @@ abstract class TestBaseClass extends Script {
         'Owner'
     }
 }
-
-
